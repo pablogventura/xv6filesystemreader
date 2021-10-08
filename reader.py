@@ -30,9 +30,12 @@ def inodo(bloque, numero):
     tipo, major, minor, nlink, size, *addrs = struct.unpack_from("hhhhI"+"I"*(NDIRECT + 1), bloque[numero*inodo_size:])
     return (tipo,major,minor,nlink,size,addrs)
 
-for i in range(10):
+for i in range(8):
     print(inodo(bloques[inodestart],i))
-
+for i in range(8):
+    print(inodo(bloques[inodestart+1],i))
+for i in range(8):
+    print(inodo(bloques[inodestart+2],i))
 #struct dinode {
 #  short type;           // File type
 #  short major;          // Major device number (T_DEV only)
