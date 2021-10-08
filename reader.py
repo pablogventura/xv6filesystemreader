@@ -26,9 +26,12 @@ size, nblocks, ninodes, nlog, logstart, inodestart, bmapstart = struct.unpack('I
 
 bloques[inodestart]
 def inodo(bloque, numero):
-    tipo, major, minor, nlink, size = struct.unpack('hhhhI', bloque[numero*12:(numero+1)*12])
-    addrs = struct.unpack('I'*(NDIRECT+1),bloque[(numero+1)*12:(numero+1)*12+(NDIRECT+1)*4])
+    inodo_size = struct.calcsize("hhhhI"+"I"*(NDIRECT + 1))
+    tipo, major, minor, nlink, size, *addrs = struct.unpack_from("hhhhI"+"I"*(NDIRECT + 1), bloque[numero*inodo_size:])
     return (tipo,major,minor,nlink,size,addrs)
+
+for i in range(10):
+    print(inodo(bloques[inodestart],i))
 
 #struct dinode {
 #  short type;           // File type
