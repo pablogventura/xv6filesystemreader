@@ -1,70 +1,155 @@
 import struct
 
+#define T_DIR  1   // Directory
+#define T_FILE 2   // File
+#define T_DEV  3   // Device
+
+
+rawfile = open("fs.img","rb")
+rawdata = rawfile.read()
+print(len(rawdata))
 NDIRECT = 12
+dirsiz = 14
 
-f = open("fs.img","rb")
+def leer(offset, size=None):
+    if not size:
+        return rawdata[offset:]
+    else:
+        return rawdata[offset:offset+size]
 
 
-bloques = []
-b = f.read(512)
-while b:
-    if b:
-        bloques.append(b)
-        b = f.read(512)
-bloqueboot = bloques[0] # no se usa
-superbloque = bloques[1]
+class SuperBlock(object):
+    #  uint size;         // Size of file system image (blocks)
+    #  uint nblocks;      // Number of data blocks
+    #  uint ninodes;      // Number of inodes.
+    #  uint nlog;         // Number of log blocks
+    #  uint logstart;     // Block number of first log block
+    #  uint inodestart;   // Block number of first inode block
+    #  uint bmapstart;    // Block number of first free map block
+    def __init__(self, number):
+        self.size, self.nblocks, self.ninodes, self.nlog, self.logstart, self.inodestart, self.bmapstart = struct.unpack_from('I'*7, leer(512,4*7))
 
-size, nblocks, ninodes, nlog, logstart, inodestart, bmapstart = struct.unpack_from('I'*7, superbloque[0:4*7] )
+sblock = SuperBlock(1)#dado por la especificacion del filesystem
 
-#  uint size;         // Size of file system image (blocks)
-#  uint nblocks;      // Number of data blocks
-#  uint ninodes;      // Number of inodes.
-#  uint nlog;         // Number of log blocks
-#  uint logstart;     // Block number of first log block
-#  uint inodestart;   // Block number of first inode block
-#  uint bmapstart;    // Block number of first free map block
-
-bloques[inodestart]
-def inodo(bloque, numero):
-    inodo_size = struct.calcsize("hhhhI"+"I"*(NDIRECT + 1))
-    tipo, major, minor, nlink, size, *addrs = struct.unpack_from("hhhhI"+"I"*(NDIRECT + 1), bloque[numero*inodo_size:])
-    return (tipo,major,minor,nlink,size,addrs)
-
-inodos = []
-b = 0
-while len(inodos) < ninodes:
-    for i in range(8):
-        inodos.append(inodo(bloques[inodestart+b],i))
-    print(b)
-    b+=1
+class Inode(object):
+    #struct dinode {
+    #  short type;           // File type
+    #  short major;          // Major device number (T_DEV only)
+    #  short minor;          // Minor device number (T_DEV only)
+    #  short nlink;          // Number of links to inode in file system
+    #  uint size;            // Size of file (bytes)
+    def __init__(self, number):
+        self.number = number
+        inodo_size = struct.calcsize("hhhhI"+"I"*(NDIRECT + 1))
+        self.tipo, self.major, self.minor, self.nlink, self.size, *self.addrs = struct.unpack_from("hhhhI"+"I"*(NDIRECT + 1), leer(sblock.inodestart*512+number*inodo_size))
     
-inodos_usados = [i for i in inodos if i[0] != 0]
-
-
-#struct dinode {
-#  short type;           // File type
-#  short major;          // Major device number (T_DEV only)
-#  short minor;          // Minor device number (T_DEV only)
-#  short nlink;          // Number of links to inode in file system
-#  uint size;            // Size of file (bytes)
-#  uint addrs[NDIRECT+1];   // Data block addresses
-#};
-
-
-def datos(inodo):
-    size = inodo[-2]
-    result = b""
-    for data_block in inodo[-1]:
-        if data_block == 0:
-            break
-        result += bloques[data_block]
-    return result[:size]
+    def is_dir(self):
+        return self.tipo == 1
+    
+    def is_file(self):
+        return self.tipo == 2
+    
+    def is_device(self):
+        return self.tipo == 3
+    
+    def data(self):
+        result = b""
+        for data_block in self.addrs:
+            if data_block == 0:
+                break
+            result += leer(512*data_block,512)
+        return result[:self.size]
+    def __repr__(self):
+        return "Inode(number=%s)" % self.number
 
 
 
 
 
 
+i=0
+root_inode = Inode(i)
+while not root_inode.is_dir():
+    i+=1
+    root_inode = Inode(i)
+    
+def path_inodo(name, inodo):
+    if inodo.is_dir():
+        return Directory(name,inodo)
+    elif inodo.is_file():
+        return File(name, inodo)
+    elif inodo.is_device():
+        return Device(name, inodo)
+    else:
+        print(name)
+        print(inodo)
+        assert False
 
+class Device(object):
+    def __init__(self, name, inode):
+        assert inode.is_device()
+        self.name = name
+        self.inode = inode
+        self.size = inode.size
+    def read(self):
+        return self.inode.data()
+    def __repr__(self):
+        return "Device(\'%s\', %s)" % (self.name, self.inode)
+
+class File(object):
+    def __init__(self, name, inode):
+        assert inode.is_file()
+        self.name = name
+        self.inode = inode
+        self.size = inode.size
+    def read(self):
+        return self.inode.data()
+    def __repr__(self):
+        return "File(\'%s\', %s)" % (self.name, self.inode)
+
+class Directory(object):
+    def __init__(self, name, inode):
+        assert inode.is_dir()
+        self.name = name
+        dirents = inode.data()
+        archivos = []
+        dirents = dirents[16*2:] # tiro . y ..
+        while dirents:
+            dirent, dirents = dirents[0:16], dirents[16:]
+            inum, *namedata = struct.unpack_from("H"+ str(dirsiz) + "c", dirent)
+            if inum != 0:
+                name = ""
+                for c in namedata:
+                    if c != b"\x00":
+                        name += c.decode("ascii")
+                    else:
+                        break
+                archivos.append(path_inodo(name,Inode(inum)))
+        self.archivos = archivos
+    def __repr__(self):
+        return "Directory(\'%s\', %s)" % (self.name, self.inode)
+directorio_raiz = Directory("root",root_inode)
+
+
+import os
+
+os.mkdir("xv6fs")
+path = ["xv6fs"]
+def creador(directorio):
+    os.mkdir("/".join(path) + "/" + directorio.name)
+    path.append(directorio.name)
+    for archivo in directorio.archivos:
+        if archivo.inode.is_dir():
+            creador(archivo)
+        elif archivo.inode.is_file():
+            f = open("/".join(path) + "/" + archivo.name, "bw")
+            f.write(archivo.read())
+            f.close()
+        else:
+            f = open("/".join(path) + "/" + archivo.name, "bw")
+            f.write(b"Device file in xv6")
+            f.close()
+
+creador(directorio_raiz)
 
 
