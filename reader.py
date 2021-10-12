@@ -52,12 +52,20 @@ class Inode(object):
     def is_device(self):
         return self.tipo == 3
     
+    def get_indirect_addrs(self):
+        data = leer(512*self.addrs[NDIRECT], 512)
+        indirect_addrs = [int.from_bytes(data[i:i+4], 'little') 
+                          for i in range(0, 512, 4)]
+        return indirect_addrs
+
     def data(self):
         result = b""
-        for data_block in self.addrs:
+        addrs = self.addrs[:NDIRECT] + self.get_indirect_addrs()
+        for data_block in addrs:
             if data_block == 0:
-                break
-            result += leer(512*data_block,512)
+                continue
+            else:
+                result += leer(512*data_block, 512)
         return result[:self.size]
     def __repr__(self):
         return "Inode(number=%s)" % self.number
