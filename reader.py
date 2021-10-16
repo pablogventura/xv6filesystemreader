@@ -7,9 +7,9 @@ import struct
 
 rawfile = open("fs.img","rb")
 rawdata = rawfile.read()
-print(len(rawdata))
-NDIRECT = 12
-dirsiz = 14
+
+NDIRECT = 12 # cantidad de bloques directos
+dirsiz = 14 # bytes de una entrada de directorio
 
 def leer(offset, size=None):
     if not size:
@@ -19,6 +19,7 @@ def leer(offset, size=None):
 
 
 class SuperBlock(object):
+    #dado por la especificacion del filesystem
     #  uint size;         // Size of file system image (blocks)
     #  uint nblocks;      // Number of data blocks
     #  uint ninodes;      // Number of inodes.
@@ -26,10 +27,10 @@ class SuperBlock(object):
     #  uint logstart;     // Block number of first log block
     #  uint inodestart;   // Block number of first inode block
     #  uint bmapstart;    // Block number of first free map block
-    def __init__(self, number):
+    def __init__(self):
         self.size, self.nblocks, self.ninodes, self.nlog, self.logstart, self.inodestart, self.bmapstart = struct.unpack_from('I'*7, leer(512,4*7))
 
-sblock = SuperBlock(1)#dado por la especificacion del filesystem
+sblock = SuperBlock()
 
 class Inode(object):
     #struct dinode {
