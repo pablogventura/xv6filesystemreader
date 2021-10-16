@@ -4,10 +4,6 @@ import struct
 #define T_FILE 2   // File
 #define T_DEV  3   // Device
 
-
-rawfile = open("fs.img","rb")
-rawdata = rawfile.read()
-
 NDIRECT = 12 # cantidad de bloques directos
 dirsiz = 14 # bytes de una entrada de directorio
 
@@ -30,7 +26,7 @@ class SuperBlock(object):
     def __init__(self):
         self.size, self.nblocks, self.ninodes, self.nlog, self.logstart, self.inodestart, self.bmapstart = struct.unpack_from('I'*7, leer(512,4*7))
 
-sblock = SuperBlock()
+
 
 class Inode(object):
     #struct dinode {
@@ -76,11 +72,7 @@ class Inode(object):
 
 
 
-i=0
-root_inode = Inode(i)
-while not root_inode.is_dir():
-    i+=1
-    root_inode = Inode(i)
+
     
 def path_inodo(name, inodo):
     if inodo.is_dir():
@@ -137,6 +129,21 @@ class Directory(object):
         self.archivos = archivos
     def __repr__(self):
         return "Directory(\'%s\', %s)" % (self.name, self.inode)
+        
+        
+
+
+rawfile = open("fs.img","rb")
+rawdata = rawfile.read()
+
+sblock = SuperBlock()
+
+i=0
+root_inode = Inode(i)
+while not root_inode.is_dir():
+    i+=1
+    root_inode = Inode(i)
+
 directorio_raiz = Directory("root",root_inode)
 
 
