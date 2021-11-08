@@ -241,11 +241,22 @@ class Passthrough(Operations):
 #  uint size;   // Size of file in bytes
 #};
 
+
+
+
         print("getattr(%s,%s)" % (path,fh))
-        full_path = self._full_path(path)
-        st = os.lstat(full_path)
-        return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
-                     'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
+        if path not in {"/.Trash","/.Trash-1000","/.xdg-volume-info","/autorun.inf"}:
+        
+            #st = os.lstat(full_path)
+            result = {'st_atime':1636280338,
+                      'st_ctime':1636280338,
+                      'st_mtime':1636280338,
+                      'st_gid':1000,
+                      'st_mode':33204,
+                      'st_nlink':1,
+                      'st_size':200,
+                      'st_uid':1000}
+            return result
 
     def readdir(self, path, fh):
         print("readdir(%s,%s)" % (path,fh))
