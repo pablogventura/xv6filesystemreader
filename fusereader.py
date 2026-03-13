@@ -1,352 +1,186 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""
+Mount an xv6 disk image as a FUSE file system on Linux.
+Usage: python3 fusereader.py <image> <mount_point> [--write]
+"""
 
-import struct
-import os
-import sys
 import errno
+import os
+import stat
+import sys
 
-from fuse import FUSE, FuseOSError, Operations, fuse_get_context
+from fuse import FUSE, FuseOSError, Operations
 
+from reader import DiscImage, Directory, File
 
-
-
-#define T_DIR  1   // Directory
-#define T_FILE 2   // File
-#define T_DEV  3   // Device
-
-NDIRECT = 12 # cantidad de bloques directos
-dirsiz = 14 # bytes de una entrada de directorio
-
-def leer(offset, size=None):
-    if not size:
-        return rawdata[offset:]
-    else:
-        return rawdata[offset:offset+size]
+# Constants for st_mode (file types)
+S_IFDIR = 0o040000
+S_IFREG = 0o100000
+S_IFCHR = 0o020000
 
 
-class SuperBlock(object):
-    #dado por la especificacion del filesystem
-    #  uint size;         // Size of file system image (blocks)
-    #  uint nblocks;      // Number of data blocks
-    #  uint ninodes;      // Number of inodes.
-    #  uint nlog;         // Number of log blocks
-    #  uint logstart;     // Block number of first log block
-    #  uint inodestart;   // Block number of first inode block
-    #  uint bmapstart;    // Block number of first free map block
-    def __init__(self):
-        self.size, self.nblocks, self.ninodes, self.nlog, self.logstart, self.inodestart, self.bmapstart = struct.unpack_from('I'*7, leer(512,4*7))
+class XV6Fuse(Operations):
+    def __init__(self, image_path, writable=False):
+        self.image_path = image_path
+        self.writable = writable
+        self.disc = DiscImage(image_path, writable=writable)
+        self._written_paths = set()  # paths modified for sync on release
 
-
-
-class Inode(object):
-    #struct dinode {
-    #  short type;           // File type
-    #  short major;          // Major device number (T_DEV only)
-    #  short minor;          // Minor device number (T_DEV only)
-    #  short nlink;          // Number of links to inode in file system
-    #  uint size;            // Size of file (bytes)
-    def __init__(self, number):
-        self.number = number
-        inodo_size = struct.calcsize("hhhhI"+"I"*(NDIRECT + 1))
-        self.tipo, self.major, self.minor, self.nlink, self.size, *self.addrs = struct.unpack_from("hhhhI"+"I"*(NDIRECT + 1), leer(sblock.inodestart*512+number*inodo_size))
-    
-    def is_dir(self):
-        return self.tipo == 1
-    
-    def is_file(self):
-        return self.tipo == 2
-    
-    def is_device(self):
-        return self.tipo == 3
-    
-    def get_indirect_addrs(self):
-        if self.addrs[NDIRECT] == 0:
-            return []
-        data = leer(512*self.addrs[NDIRECT], 512)
-        indirect_addrs = [int.from_bytes(data[i:i+4], 'little') 
-                          for i in range(0, 512, 4)]
-        return indirect_addrs
-
-    def data(self):
-        result = b""
-        addrs = self.addrs[:NDIRECT] + self.get_indirect_addrs()
-        for data_block in addrs:
-            if data_block == 0:
-                break
-            result += leer(512*data_block, 512)
-        return result[:self.size]
-    def __repr__(self):
-        return "Inode(number=%s)" % self.number
-
-
-
-
-
-
-
-    
-def path_inodo(name, inodo):
-    if inodo.is_dir():
-        return Directory(name,inodo)
-    elif inodo.is_file():
-        return File(name, inodo)
-    elif inodo.is_device():
-        return Device(name, inodo)
-    else:
-        print(name)
-        print(inodo)
-        assert False
-
-class Device(object):
-    def __init__(self, name, inode):
-        assert inode.is_device()
-        self.name = name
-        self.inode = inode
-        self.size = inode.size
-    def read(self):
-        return self.inode.data()
-    def __repr__(self):
-        return "Device(\'%s\', %s)" % (self.name, self.inode)
-
-class File(object):
-    def __init__(self, name, inode):
-        assert inode.is_file()
-        self.name = name
-        self.inode = inode
-        self.size = inode.size
-    def read(self):
-        return self.inode.data()
-    def __repr__(self):
-        return "File(\'%s\', %s)" % (self.name, self.inode)
-
-class Directory(object):
-    def __init__(self, name, inode):
-        assert inode.is_dir()
-        self.name = name
-        dirents = inode.data()
-        archivos = dict()
-        dirents = dirents[16*2:] # tiro . y ..
-        while dirents:
-            dirent, dirents = dirents[0:16], dirents[16:]
-            inum, *namedata = struct.unpack_from("H"+ str(dirsiz) + "c", dirent)
-            if inum != 0:
-                name = ""
-                for c in namedata:
-                    if c != b"\x00":
-                        name += c.decode("ascii")
-                    else:
-                        break
-                archivos[name] = path_inodo(name,Inode(inum))
-        self.archivos = archivos
-
-    def deref_dir(self, path):
-        if path == "/" or path == "":
-            return list(self.archivos.keys()) + [".", ".."]
-        else:
-            d, path = path.split("/",1)
-            if d in self.archivos:
-                return self.archivos[d].deref_dir(path)
-            else:
-                print("no existe: %s, %s" % (d,path))
-
-        
-        
-    def __repr__(self):
-        return "Directory(\'%s\', %s)" % (self.name, self.inode)
-        
-        
-
-
-rawfile = open("fs.img","rb")
-rawdata = rawfile.read()
-
-sblock = SuperBlock()
-
-i=0
-root_inode = Inode(i)
-while not root_inode.is_dir():
-    i+=1
-    root_inode = Inode(i)
-
-directorio_raiz = Directory("root",root_inode)
-
-
-path = ["xv6fs"]
-def creador(directorio):
-    os.mkdir("/".join(path) + "/" + directorio.name)
-    path.append(directorio.name)
-    for archivo in directorio.archivos.values():
-        if archivo.inode.is_dir():
-            creador(archivo)
-            path.pop()
-        elif archivo.inode.is_file():
-            f = open("/".join(path) + "/" + archivo.name, "bw")
-            f.write(archivo.read())
-            f.close()
-        else:
-            f = open("/".join(path) + "/" + archivo.name, "bw")
-            f.write(b"Device file in xv6")
-            f.close()
-
-def lspath(path):
-    dirs = path.split("/")
-    
-
-
-
-class Passthrough(Operations):
-    def __init__(self, root = None):
-        self.root = root
-
-    # Helpers
-    # =======
-
-
-
-    # Filesystem methods
-    # ==================
-
-#    def access(self, path, mode):
-#        full_path = self._full_path(path)
-#        if not os.access(full_path, mode):
-#            raise FuseOSError(errno.EACCES)
-
-#    def chmod(self, path, mode):
-#        full_path = self._full_path(path)
-#        return os.chmod(full_path, mode)
-
-#    def chown(self, path, uid, gid):
-#        full_path = self._full_path(path)
-#        return os.chown(full_path, uid, gid)
+    def _resolve(self, path):
+        """Resolve a FUSE path (e.g. /init, /etc/hostname) to the corresponding node."""
+        path = path or "/"
+        if path == "/":
+            return self.disc.inodes.root_inode.to_file("/")
+        return self.disc.resolve_path(path)
 
     def getattr(self, path, fh=None):
+        path = path or "/"
+        node = self._resolve(path)
+        if node is None:
+            raise FuseOSError(errno.ENOENT)
+        ino = node.inode.number
+        nlink = node.inode.nlink
+        size = getattr(node, "size", node.inode.size)
+        now = 1636280338  # xv6 does not store timestamps
+        if node.inode.is_dir():
+            return {
+                "st_atime": now,
+                "st_ctime": now,
+                "st_mtime": now,
+                "st_gid": 0,
+                "st_mode": S_IFDIR | 0o755,
+                "st_nlink": max(nlink, 2),
+                "st_size": 0,
+                "st_uid": 0,
+                "st_ino": ino,
+            }
+        if node.inode.is_file():
+            return {
+                "st_atime": now,
+                "st_ctime": now,
+                "st_mtime": now,
+                "st_gid": 0,
+                "st_mode": S_IFREG | 0o644,
+                "st_nlink": nlink,
+                "st_size": size,
+                "st_uid": 0,
+                "st_ino": ino,
+            }
+        # Device (T_DEV)
+        return {
+            "st_atime": now,
+            "st_ctime": now,
+            "st_mtime": now,
+            "st_gid": 0,
+            "st_mode": S_IFCHR | 0o666,
+            "st_nlink": nlink,
+            "st_size": 0,
+            "st_uid": 0,
+            "st_ino": ino,
+            "st_rdev": (node.inode.major << 8) | node.inode.minor,
+        }
 
-#void
-#stati(struct inode *ip, struct stat *st)
-#{
-#  st->dev = ip->dev;
-#  st->ino = ip->inum;
-#  st->type = ip->type;
-#  st->nlink = ip->nlink;
-#  st->size = ip->size;
-#}
-
-##define T_DIR  1   // Directory
-##define T_FILE 2   // File
-##define T_DEV  3   // Device
-
-#struct stat {
-#  short type;  // Type of file
-#  int dev;     // File system's disk device
-#  uint ino;    // Inode number
-#  short nlink; // Number of links to file
-#  uint size;   // Size of file in bytes
-#};
-
-
-
-
-        print("getattr(%s,%s)" % (path,fh))
-        if path not in {"/.Trash","/.Trash-1000","/.xdg-volume-info","/autorun.inf"}:
-        
-            #st = os.lstat(full_path)
-            result = {'st_atime':1636280338,
-                      'st_ctime':1636280338,
-                      'st_mtime':1636280338,
-                      'st_gid':1000,
-                      'st_mode':33204,
-                      'st_nlink':1,
-                      'st_size':200,
-                      'st_uid':1000}
-            return result
-
-    def readdir(self, path, fh):
-        print("readdir(%s,%s)" % (path,fh))
-        for r in directorio_raiz.deref_dir(path):
-            yield r
-
-#    def readlink(self, path):
-#        pathname = os.readlink(self._full_path(path))
-#        if pathname.startswith("/"):
-#            # Path name is absolute, sanitize it.
-#            return os.path.relpath(pathname, self.root)
-#        else:
-#            return pathname
-
-#    def mknod(self, path, mode, dev):
-#        return os.mknod(self._full_path(path), mode, dev)
-
-#    def rmdir(self, path):
-#        full_path = self._full_path(path)
-#        return os.rmdir(full_path)
-
-#    def mkdir(self, path, mode):
-#        return os.mkdir(self._full_path(path), mode)
-
-    def statfs(self, path):
-        print("statfs de %s" % path)
-        full_path = self._full_path(path)
-        stv = os.statvfs(full_path)
-        return dict((key, getattr(stv, key)) for key in ('f_bavail', 'f_bfree',
-            'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
-            'f_frsize', 'f_namemax'))
-
-#    def unlink(self, path):
-#        return os.unlink(self._full_path(path))
-
-#    def symlink(self, name, target):
-#        return os.symlink(target, self._full_path(name))
-
-#    def rename(self, old, new):
-#        return os.rename(self._full_path(old), self._full_path(new))
-
-#    def link(self, target, name):
-#        return os.link(self._full_path(name), self._full_path(target))
-
-#    def utimens(self, path, times=None):
-#        return os.utime(self._full_path(path), times)
-
-    # File methods
-    # ============
+    def readdir(self, path, fh=None):
+        path = path or "/"
+        node = self._resolve(path)
+        if node is None or not node.inode.is_dir():
+            raise FuseOSError(errno.ENOENT)
+        yield "."
+        yield ".."
+        for f in node.files:
+            yield f.name
 
     def open(self, path, flags):
-        full_path = self._full_path(path)
-        return os.open(full_path, flags)
-
-#    def create(self, path, mode, fi=None):
-#        uid, gid, pid = fuse_get_context()
-#        full_path = self._full_path(path)
-#        fd = os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
-#        os.chown(full_path,uid,gid) #chown to context uid & gid
-#        return fd
+        path = path or "/"
+        node = self._resolve(path)
+        if node is None:
+            raise FuseOSError(errno.ENOENT)
+        if node.inode.is_dir():
+            # FUSE opens dirs for readdir; we don't need fh
+            return 0
+        # For files/devices we use the path as fh for read/write
+        return path
 
     def read(self, path, length, offset, fh):
-        os.lseek(fh, offset, os.SEEK_SET)
-        return os.read(fh, length)
+        path = path or "/"
+        node = self._resolve(path)
+        if node is None:
+            raise FuseOSError(errno.ENOENT)
+        if node.inode.is_dir():
+            raise FuseOSError(errno.EISDIR)
+        data = node.read()
+        if offset >= len(data):
+            return b""
+        return data[offset : offset + length]
 
-#    def write(self, path, buf, offset, fh):
-#        os.lseek(fh, offset, os.SEEK_SET)
-#        return os.write(fh, buf)
-
-#    def truncate(self, path, length, fh=None):
-#        full_path = self._full_path(path)
-#        with open(full_path, 'r+') as f:
-#            f.truncate(length)
-
-#    def flush(self, path, fh):
-#        return os.fsync(fh)
+    def write(self, path, buf, offset, fh):
+        if not self.writable:
+            raise FuseOSError(errno.EROFS)
+        path = path or "/"
+        node = self._resolve(path)
+        if node is None:
+            raise FuseOSError(errno.ENOENT)
+        if not node.inode.is_file():
+            raise FuseOSError(errno.EISDIR if node.inode.is_dir() else errno.EPERM)
+        # Write at offset: read full content, splice in buf, write back
+        content = node.read()
+        end = offset + len(buf)
+        if end > len(content):
+            content = content.ljust(end, b"\x00")
+        content = content[:offset] + buf + content[end:]
+        node.write(content)
+        self._written_paths.add(path)
+        return len(buf)
 
     def release(self, path, fh):
-        return os.close(fh)
+        if path and path in self._written_paths:
+            self._written_paths.discard(path)
+            self.disc.sync()
 
-#    def fsync(self, path, fdatasync, fh):
-#        return self.flush(path, fh)
+    def destroy(self, path=None):
+        """On unmount, flush the image if there were writes."""
+        if self._written_paths:
+            self.disc.sync()
+            self._written_paths.clear()
+
+    def statfs(self, path):
+        sb = self.disc.superblock
+        return {
+            "f_bavail": sb.nblocks,  # approximate
+            "f_bfree": sb.nblocks,
+            "f_blocks": sb.size,
+            "f_bsize": 512,
+            "f_favail": sb.ninodes,
+            "f_ffree": sb.ninodes,
+            "f_files": sb.ninodes,
+            "f_flag": 0,
+            "f_frsize": 512,
+            "f_namemax": 255,
+        }
 
 
 def main():
-    FUSE(Passthrough(), "mnt", nothreads=True, foreground=True, allow_other=True, debug=False)
+    if len(sys.argv) < 3:
+        print("Usage: %s <xv6_image> <mount_point> [--write]" % sys.argv[0], file=sys.stderr)
+        print("  --write  allow modifying files (writes are saved to the image)", file=sys.stderr)
+        sys.exit(1)
+    image_path = sys.argv[1]
+    mount_point = sys.argv[2]
+    writable = "--write" in sys.argv or "-w" in sys.argv
+    if not os.path.isfile(image_path):
+        print("Image file not found: %s" % image_path, file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isdir(mount_point):
+        print("Mount point does not exist or is not a directory: %s" % mount_point, file=sys.stderr)
+        sys.exit(1)
+    FUSE(
+        XV6Fuse(image_path, writable=writable),
+        mount_point,
+        nothreads=True,
+        foreground=True,
+        allow_other=False,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

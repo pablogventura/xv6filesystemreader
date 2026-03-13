@@ -1,0 +1,20 @@
+# Build / publish
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Extraction output (default output of xv6fs-extract)
+root/
+
+# Python
+__pycache__/
+
+# Editor / OS
+*.swp
+.DS_Store
