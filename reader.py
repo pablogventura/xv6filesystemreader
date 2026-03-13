@@ -45,6 +45,8 @@ class Inode(object):
         return self.tipo == 3
     
     def get_indirect_addrs(self):
+        if self.addrs[NDIRECT] == 0:
+            return []
         data = self.disc.block(self.addrs[NDIRECT])
         indirect_addrs = [int.from_bytes(data[i:i+4], 'little') 
                           for i in range(0, 512, 4)]
@@ -106,7 +108,7 @@ class DiscImage(object):
     def inode(self, index):
         return self.inodes.inode(index)
     
-    def read(ofset, size=None):
+    def read(self, offset, size=None):
         if not size:
             return self.rawdata[offset:]
         else:
@@ -171,6 +173,7 @@ def extract(dir):
     for f in dir.files:
         if f.inode.is_dir():
             extract(f)
+            path.pop()
         elif f.inode.is_file():
             output_file = open("/".join(path) + "/" + f.name, "bw")
             output_file.write(f.read())

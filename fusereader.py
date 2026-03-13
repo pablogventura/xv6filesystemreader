@@ -60,6 +60,8 @@ class Inode(object):
         return self.tipo == 3
     
     def get_indirect_addrs(self):
+        if self.addrs[NDIRECT] == 0:
+            return []
         data = leer(512*self.addrs[NDIRECT], 512)
         indirect_addrs = [int.from_bytes(data[i:i+4], 'little') 
                           for i in range(0, 512, 4)]
@@ -70,9 +72,8 @@ class Inode(object):
         addrs = self.addrs[:NDIRECT] + self.get_indirect_addrs()
         for data_block in addrs:
             if data_block == 0:
-                continue
-            else:
-                result += leer(512*data_block, 512)
+                break
+            result += leer(512*data_block, 512)
         return result[:self.size]
     def __repr__(self):
         return "Inode(number=%s)" % self.number
@@ -138,9 +139,9 @@ class Directory(object):
                 archivos[name] = path_inodo(name,Inode(inum))
         self.archivos = archivos
 
-    def deref_dir(self,path):
-        if path == "/":
-            return list(self.archivos.keys()) + [".",".."]
+    def deref_dir(self, path):
+        if path == "/" or path == "":
+            return list(self.archivos.keys()) + [".", ".."]
         else:
             d, path = path.split("/",1)
             if d in self.archivos:
@@ -174,9 +175,10 @@ path = ["xv6fs"]
 def creador(directorio):
     os.mkdir("/".join(path) + "/" + directorio.name)
     path.append(directorio.name)
-    for archivo in directorio.archivos:
+    for archivo in directorio.archivos.values():
         if archivo.inode.is_dir():
             creador(archivo)
+            path.pop()
         elif archivo.inode.is_file():
             f = open("/".join(path) + "/" + archivo.name, "bw")
             f.write(archivo.read())
